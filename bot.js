@@ -342,17 +342,16 @@ function postNextThreeShiftsWithWeapons(){
   }
 }
 
-//===デバッグ===
-//重複防止キーを削除して次の本通知を強制可能にする
+//デバッグ
+//重複防止キーを削除して次の本通知を強制可能に
 function debugResetLast(){
   PropertiesService.getScriptProperties().deleteProperty(PROP_KEY_LAST_START_TIME);
   Logger.log('プロパティ "'+PROP_KEY_LAST_START_TIME+'" を削除');
 }
-//直ちに本通知を試行して動作確認する
+//本通知を試行して動作確認
 function postShiftNowForce(){ debugResetLast(); postShiftNow(); }
 
-//===観測用(任意)===
-//次シフトの生JSONをログ出力してAPI疎通を確認する
+//次シフトの生JSONをログ出力してAPI疎通を確認
 function dryRunNext(){
   const ua=PropertiesService.getScriptProperties().getProperty(PROP_KEY_USER_AGENT)||DEFAULT_USER_AGENT;
   const next=getFirstResult(fetchJson(API_NEXT_URL,ua));
