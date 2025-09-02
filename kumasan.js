@@ -152,6 +152,8 @@ function backupHourly() {
 }
 
 function setNextTriggers() {
+    //ステップ1: 既存トリガーの掃除
+    //処理が重複しないよう、この関数で設定対象となるトリガーを一度すべて削除
     const targets = ['postShiftNow', 'postShiftPre', 'backupHourly'];
     ScriptApp.getProjectTriggers().forEach(tr => {
         if (targets.includes(tr.getHandlerFunction())) {
@@ -159,10 +161,14 @@ function setNextTriggers() {
         }
     });
 
+    //ステップ2: 次回シフト情報の取得と準備
+    //APIから次回シフト情報を取得するために必要な設定を読み込み
     const props = PropertiesService.getScriptProperties();
     const userAgent = props.getProperty(PROP_KEY_USER_AGENT) || DEFAULT_USER_AGENT;
     const preNotifyMinutes = parseInt(props.getProperty(PROP_KEY_PRE_NOTIFY_MIN) || '0', 10);
 
+    //外部APIへアクセスし、次回シフト情報を取得
+    //通信失敗時はエラーをログに記録し、`nextShift`はnullのまま後続処理へ
     let nextShift = null;
     try {
         nextShift = getFirstResult(fetchJson(API_NEXT_URL, userAgent));
@@ -170,36 +176,58 @@ function setNextTriggers() {
         Logger.log('次回取得失敗:' + e);
     }
 
+    //ステップ3: 取得結果に応じた次回トリガーを設定
     const now = new Date();
+
+    //正常系: 次回シフト情報が取得できた場合
     if (nextShift) {
         const startTime = new Date(nextShift.start_time);
+
+        //ケースA: シフト開始時刻が未来である(正常)
         if (startTime > now) {
+
+            //本通知トリガー: シフト開始時刻に`postShiftNow`を実行するよう設定
             ScriptApp.newTrigger('postShiftNow').timeBased().at(startTime).create();
             Logger.log('本通知トリガー:' + startTime.toISOString());
+
+            //事前通知トリガー: 事前通知の設定が有効な場合
             if (preNotifyMinutes > 0) {
-                const pre = new Date(startTime.getTime() - preNotifyMinutes * MS_PER_MINUTE);
-                if (pre > now) {
-                    ScriptApp.newTrigger('postShiftPre').timeBased().at(pre).create();
-                    Logger.log('事前通知トリガー:' + pre.toISOString());
+                const preNotifyTime = new Date(startTime.getTime() - preNotifyMinutes * MS_PER_MINUTE);
+
+                //事前通知時刻が未来であれば、`postShiftPre`を実行するよう設定
+                if (preNotifyTime > now) {
+                    ScriptApp.newTrigger('postShiftPre').timeBased().at(preNotifyTime).create();
+                    Logger.log('事前通知トリガー:' + preNotifyTime.toISOString());
                 } else {
                     Logger.log('事前通知時刻は過去');
                 }
             }
+
+        //ケースB: シフト開始時刻が過去である(APIのキャッシュ等)
         } else {
+            //一定時間後に再試行するためのトリガーを設定
             ScriptApp.newTrigger('postShiftNow').timeBased().after(RETRY_AFTER_MS_ON_PAST).create();
             Logger.log('過去時刻を掴んだため' + (RETRY_AFTER_MS_ON_PAST / 1000) + '秒後に再試行');
         }
+
+    //異常系: 次回シフト情報が取得できなかった場合
     } else {
+        // APIダウン等を想定し、一定時間後に再試行するためのトリガーを設定
         ScriptApp.newTrigger('postShiftNow').timeBased().after(RETRY_AFTER_MS_ON_FETCH_FAIL).create();
         Logger.log('次回取得不可。' + (RETRY_AFTER_MS_ON_FETCH_FAIL / 60000) + '分後に再試行');
     }
 
+    //ステップ4: バックアップトリガーの設定と最終確認
+    //[バックアップトリガー: どのような条件でも、1時間ごとに再実行する保険のトリガーを設定
+    //これにより、予期せぬエラーでトリガー設定が途絶えても自己修復を試みる
     ScriptApp.newTrigger('backupHourly').timeBased().everyHours(1).create();
     Logger.log('バックアップ(毎時)設定完了');
 
+    //最終確認ログ: 現在プロジェクトに設定されている全トリガーの情報をログに出力
     const ts = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction() + ':' + t.getTriggerSource());
     Logger.log('現在のトリガー:' + JSON.stringify(ts));
 }
+
 
 function rescheduleTriggersSafely() {
     try {
